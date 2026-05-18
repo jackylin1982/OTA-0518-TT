@@ -1,168 +1,154 @@
 #include <WiFi.h>
-#include <WiFiClient.h>
-#include <WebServer.h>
-#include <ESPmDNS.h>
-#include <Update.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
 
-const char* host = "esp32";
+/* WiFi */
 const char* ssid = "labor";
 const char* password = "98668800";
 
-WebServer server(80);
+/* Firmware Version */
+String currentVersion = "1.0.1";
 
-/*
- * Login page
- */
+/* GitHub JSON URL */
+String versionURL =
+"https://raw.githubusercontent.com/jackylin1982/OTA-0518-TT/main/firmware.json";
 
-const char* loginIndex =
- "<form name='loginForm'>"
-    "<table width='20%' bgcolor='A09F9F' align='center'>"
-        "<tr>"
-            "<td colspan=2>"
-                "<center><font size=4><b>ESP32 Login Page</b></font></center>"
-                "<br>"
-            "</td>"
-            "<br>"
-            "<br>"
-        "</tr>"
-        "<tr>"
-             "<td>Username:</td>"
-             "<td><input type='text' size=25 name='userid'><br></td>"
-        "</tr>"
-        "<br>"
-        "<br>"
-        "<tr>"
-            "<td>Password:</td>"
-            "<td><input type='Password' size=25 name='pwd'><br></td>"
-            "<br>"
-            "<br>"
-        "</tr>"
-        "<tr>"
-            "<td><input type='submit' onclick='check(this.form)' value='Login'></td>"
-        "</tr>"
-    "</table>"
-"</form>"
-"<script>"
-    "function check(form)"
-    "{"
-    "if(form.userid.value=='admin' && form.pwd.value=='admin')"
-    "{"
-    "window.open('/serverIndex')"
-    "}"
-    "else"
-    "{"
-    " alert('Error Password or Username')/*displays error message*/"
-    "}"
-    "}"
-"</script>";
+void checkOTAUpdate()
+{
+    WiFiClientSecure client;
+    client.setInsecure();
 
-/*
- * Server Index Page
- */
+    HTTPClient https;
 
-const char* serverIndex =
-"https://raw.githubusercontent.com/jackylin1982/OTA-0518-TT/main/firmware.json"
-"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-   "<input type='file' name='update'>"
-        "<input type='submit' value='Update'>"
-    "</form>"
- "<div id='prg'>progress: 0%</div>"
- "<script>"
-  "$('form').submit(function(e){"
-  "e.preventDefault();"
-  "var form = $('#upload_form')[0];"
-  "var data = new FormData(form);"
-  " $.ajax({"
-  "url: '/update',"
-  "type: 'POST',"
-  "data: data,"
-  "contentType: false,"
-  "processData:false,"
-  "xhr: function() {"
-  "var xhr = new window.XMLHttpRequest();"
-  "xhr.upload.addEventListener('progress', function(evt) {"
-  "if (evt.lengthComputable) {"
-  "var per = evt.loaded / evt.total;"
-  "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-  "}"
-  "}, false);"
-  "return xhr;"
-  "},"
-  "success:function(d, s) {"
-  "console.log('success!')"
- "},"
- "error: function (a, b, c) {"
- "}"
- "});"
- "});"
- "</script>";
+    Serial.println("=================================");
+    Serial.println("Checking OTA Update...");
+    Serial.println("=================================");
 
-/*
- * setup function
- */
-void setup(void) {
-  Serial.begin(115200);
+    if (https.begin(client, versionURL))
+    {
+        int httpCode = https.GET();
 
-  // Connect to WiFi network
-  WiFi.begin(ssid, password);
-  Serial.println("");
+        if (httpCode == HTTP_CODE_OK)
+        {
+            String payload = https.getString();
 
-  // Wait for connection
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+            Serial.println("JSON Downloaded:");
+            Serial.println(payload);
 
-  /*use mdns for host name resolution*/
-  if (!MDNS.begin(host)) { //http://esp32.local
-    Serial.println("Error setting up MDNS responder!");
-    while (1) {
-      delay(1000);
+            DynamicJsonDocument doc(1024);
+
+            DeserializationError error =
+                deserializeJson(doc, payload);
+
+            if (error)
+            {
+                Serial.print("JSON Parse Failed: ");
+                Serial.println(error.c_str());
+
+                https.end();
+                return;
+            }
+
+            String newVersion = doc["version"].as<String>();
+            String firmwareURL = doc["firmware"].as<String>();
+
+            Serial.println("---------------------------------");
+            Serial.print("Current Version: ");
+            Serial.println(currentVersion);
+
+            Serial.print("Latest Version : ");
+            Serial.println(newVersion);
+            Serial.println("---------------------------------");
+
+            /* Compare Version */
+            if (newVersion != currentVersion)
+            {
+                Serial.println("New Firmware Found");
+                Serial.println("Starting OTA Update...");
+
+                t_httpUpdate_return ret;
+
+                ret = httpUpdate.update(client, firmwareURL);
+
+                switch (ret)
+                {
+                    case HTTP_UPDATE_FAILED:
+
+                        Serial.printf(
+                            "Update Failed Error (%d): %s\n",
+                            httpUpdate.getLastError(),
+                            httpUpdate.getLastErrorString().c_str()
+                        );
+
+                        break;
+
+                    case HTTP_UPDATE_NO_UPDATES:
+
+                        Serial.println("No Updates");
+
+                        break;
+
+                    case HTTP_UPDATE_OK:
+
+                        Serial.println("Update Success");
+                        break;
+                }
+            }
+            else
+            {
+                Serial.println("Already Latest Version");
+            }
+        }
+        else
+        {
+            Serial.print("HTTP Error Code: ");
+            Serial.println(httpCode);
+        }
+
+        https.end();
     }
-  }
-  Serial.println("mDNS responder started");
-  /*return index page which is stored in serverIndex */
-  server.on("/", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/html", loginIndex);
-  });
-  server.on("/serverIndex", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/html", serverIndex);
-  });
-  /*handling uploading firmware file */
-  server.on("/update", HTTP_POST, []() {
-    server.sendHeader("Connection", "close");
-    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-    ESP.restart();
-  }, []() {
-    HTTPUpload& upload = server.upload();
-    if (upload.status == UPLOAD_FILE_START) {
-      Serial.printf("Update: %s\n", upload.filename.c_str());
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { //start with max available size
-        Update.printError(Serial);
-      }
-    } else if (upload.status == UPLOAD_FILE_WRITE) {
-      /* flashing firmware to ESP*/
-      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-        Update.printError(Serial);
-      }
-    } else if (upload.status == UPLOAD_FILE_END) {
-      if (Update.end(true)) { //true to set the size to the current progress
-        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
-      } else {
-        Update.printError(Serial);
-      }
+    else
+    {
+        Serial.println("HTTPS Connection Failed");
     }
-  });
-  server.begin();
 }
 
+void setup()
+{
+    Serial.begin(115200);
+
+    Serial.println();
+    Serial.println("=================================");
+    Serial.println("ESP32 GitHub OTA");
+    Serial.println("=================================");
+
+    /* Connect WiFi */
+    WiFi.begin(ssid, password);
+
+    Serial.print("Connecting WiFi");
+
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println();
+    Serial.println("WiFi Connected");
+
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  Serial.println(currentVersion);
+    /* Check OTA */
+    checkOTAUpdate();
+
+}
+
+void loop()
+{
+}
 void loop(void) {
   server.handleClient();
   delay(1);
