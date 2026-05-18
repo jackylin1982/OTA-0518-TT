@@ -61,8 +61,7 @@ const char* loginIndex =
  */
 
 const char* serverIndex =
-"<script src='https://raw.githubusercontent.com/jackylin1982/OTA-0518-TT
-/main/firmware.bin'></script>"
+"https://raw.githubusercontent.com/jackylin1982/OTA-0518-TT/main/firmware.json"
 "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
    "<input type='file' name='update'>"
         "<input type='submit' value='Update'>"
